@@ -3,6 +3,7 @@ import os
 import sqlite3
 import random
 import string
+import asyncio
 import requests
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -401,19 +402,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not db_user["is_verified"]:
             verify_user(user.id)
         await update.message.reply_text(
-            "🛡️ *Admin Dashboard*\n━━━━━━━━━━━━━━\nWelcome back, boss!",
+            "🛡️ *Admin Dashboard*\n━━━━━━━━━━━━━━\nWelcome back!",
             reply_markup=main_menu_kb(), parse_mode="Markdown")
         return
 
+    # Auto-reverify: check if user rejoined channel
+    if db_user and not db_user["is_verified"]:
+        is_member = await check_channel_membership(user.id, context)
+        if is_member:
+            verify_user(user.id)
+            db_user = get_user(user.id)
+
     if db_user and db_user["is_verified"]:
         await update.message.reply_text(
-            "╔══════════════════╗\n║   📬 *SMS BOT*   ║\n╚══════════════════╝\nSelect an option below:",
+            "╔══════════════════╗\n║   📬 *SMS BOT*   ║\n╚══════════════════╝\nSelect an option:",
             reply_markup=main_menu_kb(), parse_mode="Markdown")
         return
 
     ch1_link = get_setting("channel_1_link") or "https://t.me/channel1"
     ch2_link = get_setting("channel_2_link") or ""
-    text = "╔══════════════════╗\n║   👋 *WELCOME*   ║\n╚══════════════════╝\n\n📢 Join our channel to continue:"
+    text = "╔══════════════════╗\n║   👋 *WELCOME*   ║\n╚══════════════════╝\n\n📢 Join channel to continue:"
     kb_list = [[InlineKeyboardButton("📢 JOIN CHANNEL", url=ch1_link)]]
     if ch2_link:
         kb_list.append([InlineKeyboardButton("📢 JOIN CHANNEL 2", url=ch2_link)])
@@ -1280,13 +1288,64 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================================
 # MAIN
 # ============================================================
+async def db_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_USER_ID:
+        await update.message.reply_text("❌ Unauthorized.")
+        return
+    if os.path.exists(DB_FILE):
+        await update.message.reply_document(
+            document=open(DB_FILE, "rb"),
+            filename="bot_database_backup.db",
+            caption="📦 Database backup. Download this before updating the bot.\n\nRestore with /restore after redeploy."
+        )
+    else:
+        await update.message.reply_text("No database found.")
+
+async def db_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_USER_ID:
+        await update.message.reply_text("❌ Unauthorized.")
+        return
+    if update.message.document:
+        file = await update.message.document.get_file()
+        await file.download_to_drive(DB_FILE)
+        await update.message.reply_text("✅ Database restored! Restart the bot or send /start.")
+    else:
+        context.user_data["awaiting_db_restore"] = True
+        await update.message.reply_text("Send the .db backup file now.")
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_USER_ID: return
+    if context.user_data.get("awaiting_db_restore"):
+        file = await update.message.document.get_file()
+        await file.download_to_drive(DB_FILE)
+        context.user_data.pop("awaiting_db_restore", None)
+        await update.message.reply_text("✅ DB restored! /start")
+
 def main():
     init_db()
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_command))
+    app.add_handler(CommandHandler("backup", db_backup))
+    app.add_handler(CommandHandler("restore", db_restore))
     app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.Document.ALL & ~filters.COMMAND, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Set bot commands menu button
+    async def set_cmds():
+        import time
+        await asyncio.sleep(2)
+        try:
+            await app.bot.set_my_commands([
+                ("start", "🔄 Main Menu"),
+                ("admin", "🛡️ Admin Panel"),
+                ("backup", "📦 Backup DB"),
+                ("restore", "📥 Restore DB"),
+            ])
+        except Exception:
+            pass
+    asyncio.ensure_future(set_cmds())
 
     if WEBHOOK_URL or os.getenv("RENDER_EXTERNAL_URL"):
         render_url = WEBHOOK_URL or os.getenv("RENDER_EXTERNAL_URL", "")
