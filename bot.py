@@ -76,6 +76,16 @@ def init_db():
     for k, v in defaults:
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
 
+    # Auto-migrate old defaults to new values
+    migrations = [
+        ("channel_1_username", "@channel1", "@CallMessageBomber"),
+        ("channel_1_link", "https://t.me/channel1", "https://t.me/CallMessageBomber"),
+        ("channel_2_username", "@channel2", ""),
+        ("channel_2_link", "https://t.me/channel2", ""),
+    ]
+    for key, old_val, new_val in migrations:
+        c.execute("UPDATE settings SET value = ? WHERE key = ? AND value = ?", (new_val, key, old_val))
+
     c.execute("SELECT COUNT(*) FROM subscriptions")
     if c.fetchone()[0] == 0:
         plans = [
