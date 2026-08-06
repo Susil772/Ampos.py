@@ -63,10 +63,10 @@ def init_db():
         ("sms_cost", "1"),
         ("daily_bonus_credits", "5"),
         ("referral_reward_credits", "10"),
-        ("channel_1_username", os.getenv("CHANNEL_1", "@channel1")),
-        ("channel_2_username", os.getenv("CHANNEL_2", "@channel2")),
-        ("channel_1_link", os.getenv("CHANNEL_1_LINK", "https://t.me/channel1")),
-        ("channel_2_link", os.getenv("CHANNEL_2_LINK", "https://t.me/channel2")),
+        ("channel_1_username", os.getenv("CHANNEL_1", "@CallMessageBomber")),
+        ("channel_2_username", os.getenv("CHANNEL_2", "")),
+        ("channel_1_link", os.getenv("CHANNEL_1_LINK", "https://t.me/CallMessageBomber")),
+        ("channel_2_link", os.getenv("CHANNEL_2_LINK", "")),
         ("support_dev", os.getenv("SUPPORT_DEV", "@developer")),
         ("support_owner", os.getenv("SUPPORT_OWNER", "@owner")),
         ("sms_api_url", "https://sms-sender-rww0.onrender.com"),
@@ -337,12 +337,15 @@ def admin_main_kb():
 # ============================================================
 async def check_channel_membership(user_id, context):
     ch1 = get_setting("channel_1_username") or "@channel1"
-    ch2 = get_setting("channel_2_username") or "@channel2"
+    ch2 = get_setting("channel_2_username") or ""
     try:
         m1 = await context.bot.get_chat_member(ch1, user_id)
-        m2 = await context.bot.get_chat_member(ch2, user_id)
-        return m1.status in ("member", "administrator", "creator") and \
-               m2.status in ("member", "administrator", "creator")
+        ok1 = m1.status in ("member", "administrator", "creator")
+        if ch2:
+            m2 = await context.bot.get_chat_member(ch2, user_id)
+            ok2 = m2.status in ("member", "administrator", "creator")
+            return ok1 and ok2
+        return ok1
     except BadRequest:
         return False
 
@@ -370,22 +373,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         create_user(user.id, user.username, user.first_name, referred_by)
         db_user = get_user(user.id)
 
-    if db_user and db_user["is_verified"]:
+    if db_user and (db_user["is_verified"] or user.id == ADMIN_USER_ID):
         await update.message.reply_text("🌟 Welcome back! Choose an option:", reply_markup=main_menu_kb())
         return
 
     ch1_link = get_setting("channel_1_link") or "https://t.me/channel1"
-    ch2_link = get_setting("channel_2_link") or "https://t.me/channel2"
-    text = (
-        "👋 *Welcome!*\n\nTo use this bot, join both channels:\n"
-        f"📢 {ch1_link}\n📢 {ch2_link}\n\n"
-        "Then click *Verify* below."
-    )
+    ch2_link = get_setting("channel_2_link") or ""
+    text = "👋 *Welcome!*\n\nTo use this bot, join:\n📢 " + ch1_link
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📢 Channel 1", url=ch1_link)],
-        [InlineKeyboardButton("📢 Channel 2", url=ch2_link)],
-        [InlineKeyboardButton("✅ Verify", callback_data="verify")],
     ])
+    if ch2_link:
+        text += "\n📢 " + ch2_link
+        kb.inline_keyboard.append([InlineKeyboardButton("📢 Channel 2", url=ch2_link)])
+    text += "\n\nThen click *Verify* below."
+    kb.inline_keyboard.append([InlineKeyboardButton("✅ Verify", callback_data="verify")])
     await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -407,6 +409,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not db_user:
         await query.edit_message_text("Use /start first.")
         return
+    if not db_user["is_verified"] and user.id != ADMIN_USER_ID:
+        await query.edit_message_text("Please verify first. Use /start.")
+        return
 
     # ========== VERIFY ==========
     if data == "verify":
@@ -416,14 +421,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_member = await check_channel_membership(user.id, context)
         if not is_member:
             ch1_l = get_setting("channel_1_link") or "https://t.me/channel1"
-            ch2_l = get_setting("channel_2_link") or "https://t.me/channel2"
+            ch2_l = get_setting("channel_2_link") or ""
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📢 Channel 1", url=ch1_l)],
-                [InlineKeyboardButton("📢 Channel 2", url=ch2_l)],
-                [InlineKeyboardButton("✅ Verify", callback_data="verify")],
             ])
+            if ch2_l:
+                kb.inline_keyboard.append([InlineKeyboardButton("📢 Channel 2", url=ch2_l)])
+            kb.inline_keyboard.append([InlineKeyboardButton("✅ Verify", callback_data="verify")])
             await query.edit_message_text(
-                "❌ Join *both* channels first!", reply_markup=kb, parse_mode="Markdown"
+                "❌ Join the channel(s) first!", reply_markup=kb, parse_mode="Markdown"
             )
             return
         verify_user(user.id)
