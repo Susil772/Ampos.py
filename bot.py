@@ -345,20 +345,20 @@ def admin_main_kb():
 # HELPERS
 # ============================================================
 async def enforce_membership(user_id, context):
-    """Returns True if user is still in channel(s), False if they left."""
     if user_id == ADMIN_USER_ID:
         return True
-    db_user = get_user(user_id)
-    if not db_user or not db_user["is_verified"]:
-        return False
     is_member = await check_channel_membership(user_id, context)
-    if not is_member:
+    if is_member:
+        db_user = get_user(user_id)
+        if db_user and not db_user["is_verified"]:
+            verify_user(user_id)
+        return True
+    else:
         conn = get_db()
         conn.execute("UPDATE users SET is_verified = 0 WHERE user_id = ?", (user_id,))
         conn.commit()
         conn.close()
         return False
-    return True
 
 async def check_channel_membership(user_id, context):
     ch1 = get_setting("channel_1_username") or "@channel1"
