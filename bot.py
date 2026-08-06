@@ -308,12 +308,12 @@ def get_all_codes():
 def main_menu_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📤 Send Message", callback_data="send_start")],
-        [InlineKeyboardButton("👑 VIP Mode", callback_data="menu_vip")],
-        [InlineKeyboardButton("💰 Buy Subscription", callback_data="sub_menu")],
-        [InlineKeyboardButton("👤 Profile", callback_data="menu_profile")],
-        [InlineKeyboardButton("🎁 Daily Bonus", callback_data="menu_daily")],
-        [InlineKeyboardButton("🎫 Redeem Code", callback_data="redeem_start")],
-        [InlineKeyboardButton("🔗 Refer & Earn", callback_data="menu_refer")],
+        [InlineKeyboardButton("👤 Profile", callback_data="menu_profile"),
+         InlineKeyboardButton("🎁 Bonus", callback_data="menu_daily")],
+        [InlineKeyboardButton("🎫 Redeem", callback_data="redeem_start"),
+         InlineKeyboardButton("🔗 Referral", callback_data="menu_refer")],
+        [InlineKeyboardButton("👑 VIP", callback_data="menu_vip"),
+         InlineKeyboardButton("💰 Plans", callback_data="sub_menu")],
         [InlineKeyboardButton("📞 Support", callback_data="menu_support")],
     ])
 
@@ -322,14 +322,14 @@ def back_main_btn():
 
 def admin_main_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📨 SMS Settings", callback_data="admin_sms_menu")],
-        [InlineKeyboardButton("💳 Subscription Plans", callback_data="admin_subs_menu")],
-        [InlineKeyboardButton("👑 VIP / Approvals", callback_data="admin_vip_menu")],
-        [InlineKeyboardButton("🎁 Rewards Config", callback_data="admin_rewards_menu")],
-        [InlineKeyboardButton("🔗 Bot Settings", callback_data="admin_settings_menu")],
-        [InlineKeyboardButton("🎫 Redeem Codes", callback_data="admin_codes_menu")],
-        [InlineKeyboardButton("📊 Statistics", callback_data="admin_stats")],
-        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("📨 SMS Config", callback_data="admin_sms_menu"),
+         InlineKeyboardButton("💳 Plans", callback_data="admin_subs_menu")],
+        [InlineKeyboardButton("👑 VIP Mgmt", callback_data="admin_vip_menu"),
+         InlineKeyboardButton("🎁 Rewards", callback_data="admin_rewards_menu")],
+        [InlineKeyboardButton("🔗 Settings", callback_data="admin_settings_menu"),
+         InlineKeyboardButton("🎫 Codes", callback_data="admin_codes_menu")],
+        [InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
+         InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast")],
     ])
 
 # ============================================================
@@ -376,22 +376,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id == ADMIN_USER_ID:
         if not db_user["is_verified"]:
             verify_user(user.id)
-        await update.message.reply_text("🌟 Welcome Admin! Choose an option:", reply_markup=main_menu_kb())
+        await update.message.reply_text(
+            "🛡️ *Admin Dashboard*\n━━━━━━━━━━━━━━\nWelcome back, boss!",
+            reply_markup=main_menu_kb(), parse_mode="Markdown")
         return
 
     if db_user and db_user["is_verified"]:
-        await update.message.reply_text("🌟 Welcome back! Choose an option:", reply_markup=main_menu_kb())
+        await update.message.reply_text(
+            "╔══════════════════╗\n║   📬 *SMS BOT*   ║\n╚══════════════════╝\nSelect an option below:",
+            reply_markup=main_menu_kb(), parse_mode="Markdown")
         return
 
     ch1_link = get_setting("channel_1_link") or "https://t.me/channel1"
     ch2_link = get_setting("channel_2_link") or ""
-    text = "👋 *Welcome!*\n\nTo use this bot, join:\n📢 " + ch1_link
-    kb_list = [[InlineKeyboardButton("📢 Channel 1", url=ch1_link)]]
+    text = "╔══════════════════╗\n║   👋 *WELCOME*   ║\n╚══════════════════╝\n\n📢 Join our channel to continue:"
+    kb_list = [[InlineKeyboardButton("📢 JOIN CHANNEL", url=ch1_link)]]
     if ch2_link:
-        text += "\n📢 " + ch2_link
-        kb_list.append([InlineKeyboardButton("📢 Channel 2", url=ch2_link)])
-    text += "\n\nThen click *Verify* below."
-    kb_list.append([InlineKeyboardButton("✅ Verify", callback_data="verify")])
+        kb_list.append([InlineKeyboardButton("📢 JOIN CHANNEL 2", url=ch2_link)])
+    text += f"\n\n🔗 {ch1_link}"
+    if ch2_link: text += f"\n🔗 {ch2_link}"
+    text += "\n\n⬇️ Click *VERIFY* after joining ⬇️"
+    kb_list.append([InlineKeyboardButton("✅ VERIFY NOW", callback_data="verify")])
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb_list), parse_mode="Markdown")
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -411,17 +416,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     db_user = get_user(user.id)
     if not db_user:
-        await query.edit_message_text("Use /start first.")
+        await query.edit_message_text("❌ Use /start first.")
         return
-    if not db_user["is_verified"] and user.id != ADMIN_USER_ID:
-        await query.edit_message_text("Please verify first. Use /start.")
+
+    # Allow these without verification
+    unverified_ok = {"verify", "menu_main", "menu_support"}
+    if not db_user["is_verified"] and user.id != ADMIN_USER_ID and data not in unverified_ok:
+        await query.edit_message_text(
+            "⚠️ *Please verify first!*\nSend /start to join the channel and verify.",
+            parse_mode="Markdown")
         return
 
     # ========== VERIFY ==========
     if data == "verify":
         if user.id == ADMIN_USER_ID:
             verify_user(user.id)
-            await query.edit_message_text("✅ Verified! Welcome Admin!", reply_markup=main_menu_kb())
+            await query.edit_message_text(
+                "🛡️ *Admin Verified!*\n━━━━━━━━━━━━━━",
+                reply_markup=main_menu_kb(), parse_mode="Markdown")
             return
         if db_user["is_verified"]:
             await query.edit_message_text("✅ Already verified!", reply_markup=main_menu_kb())
@@ -430,19 +442,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_member:
             ch1_l = get_setting("channel_1_link") or "https://t.me/channel1"
             ch2_l = get_setting("channel_2_link") or ""
-            kb_list = [[InlineKeyboardButton("📢 Channel 1", url=ch1_l)]]
+            kb_list = [[InlineKeyboardButton("📢 JOIN CHANNEL", url=ch1_l)]]
             if ch2_l:
-                kb_list.append([InlineKeyboardButton("📢 Channel 2", url=ch2_l)])
-            kb_list.append([InlineKeyboardButton("✅ Verify", callback_data="verify")])
-            await query.edit_message_text("❌ Join channel(s) first!", reply_markup=InlineKeyboardMarkup(kb_list))
+                kb_list.append([InlineKeyboardButton("📢 JOIN CHANNEL 2", url=ch2_l)])
+            kb_list.append([InlineKeyboardButton("✅ VERIFY NOW", callback_data="verify")])
+            await query.edit_message_text(
+                "❌ *Not joined!*\n\nJoin the channel first, then click VERIFY.",
+                reply_markup=InlineKeyboardMarkup(kb_list), parse_mode="Markdown")
             return
         verify_user(user.id)
-        await query.edit_message_text("✅ Verified! Welcome!", reply_markup=main_menu_kb())
+        await query.edit_message_text(
+            "✅ *Verified Successfully!*\n\nWelcome to SMS Bot!",
+            reply_markup=main_menu_kb(), parse_mode="Markdown")
 
     # ========== MAIN MENU ==========
     elif data == "menu_main":
         clear_states(context)
-        await query.edit_message_text("Main Menu:", reply_markup=main_menu_kb())
+        await query.edit_message_text(
+            "╔══════════════════╗\n║   📬 *SMS BOT*   ║\n╚══════════════════╝\nSelect an option:",
+            reply_markup=main_menu_kb(), parse_mode="Markdown")
 
     elif data == "menu_profile":
         u = get_user(user.id)
@@ -574,7 +592,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin":
         if user.id != ADMIN_USER_ID: return
         clear_states(context)
-        await query.edit_message_text("🔧 *Admin Panel*", reply_markup=admin_main_kb(), parse_mode="Markdown")
+        await query.edit_message_text("🛡️ *Admin Panel*\n━━━━━━━━━━━━━━", reply_markup=admin_main_kb(), parse_mode="Markdown")
 
     # --- SMS Settings ---
     elif data == "admin_sms_menu":
@@ -893,7 +911,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_user = get_user(user.id)
 
     if text.lower() == "/admin" and user.id == ADMIN_USER_ID:
-        await update.message.reply_text("🔧 *Admin Panel*", reply_markup=admin_main_kb(), parse_mode="Markdown")
+        await update.message.reply_text("🛡️ *Admin Panel*\n━━━━━━━━━━━━━━", reply_markup=admin_main_kb(), parse_mode="Markdown")
         return
 
     if not db_user or not db_user["is_verified"]:
