@@ -71,7 +71,7 @@ def init_db():
         ("support_owner", os.getenv("SUPPORT_OWNER", "@owner")),
         ("sms_api_url", "https://sms-sender-rww0.onrender.com"),
         ("sms_api_key", "SuSHiLx2024SMS"),
-        ("sms_api_params", "phone={phone}&count={amount}&apikey={api_key}"),
+        ("sms_api_params", "number={phone}&count={amount}&apikey={api_key}"),
     ]
     for k, v in defaults:
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
@@ -521,7 +521,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         clear_states(context)
         context.user_data["send_state"] = "awaiting_phone"
         await query.edit_message_text(
-            "📤 *Send Message*\n\nEnter target phone number:\n(Format: +1234567890)",
+            "📤 *Send Message*\n\nEnter target phone number:\n(Example: 017XXXXXXXX)",
             parse_mode="Markdown")
 
     # ========== REDEEM CODE ==========
