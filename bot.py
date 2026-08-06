@@ -141,18 +141,16 @@ def verify_user(user_id):
     conn = get_db()
     c = conn.cursor()
     c.execute("UPDATE users SET is_verified = 1 WHERE user_id = ?", (user_id,))
-    if c.rowcount > 0:
-        user = c.fetchone() if False else None
-        conn2 = get_db()
-        u = conn2.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
-        if u and u["referred_by"]:
-            reward = int(get_setting("referral_reward_credits") or 10)
-            conn2.execute("UPDATE users SET credits = credits + ? WHERE user_id = ? AND is_verified = 1",
-                          (reward, u["referred_by"]))
-            conn2.commit()
-        conn2.close()
+    referrer_id = None
+    u = c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+    if u and u["referred_by"]:
+        referrer_id = u["referred_by"]
+        reward = int(get_setting("referral_reward_credits") or 10)
+        c.execute("UPDATE users SET credits = credits + ? WHERE user_id = ? AND is_verified = 1",
+                  (reward, referrer_id))
     conn.commit()
     conn.close()
+    return referrer_id
 
 def add_credits(user_id, amount):
     conn = get_db()
@@ -332,12 +330,12 @@ def back_main_btn():
 
 def admin_main_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📨 SMS Config", callback_data="admin_sms_menu"),
-         InlineKeyboardButton("💳 Plans", callback_data="admin_subs_menu")],
-        [InlineKeyboardButton("👑 VIP Mgmt", callback_data="admin_vip_menu"),
+        [InlineKeyboardButton("⚡ SMS Config", callback_data="admin_sms_menu"),
+         InlineKeyboardButton("👥 VIP Mgmt", callback_data="admin_vip_menu")],
+        [InlineKeyboardButton("💳 Plans", callback_data="admin_subs_menu"),
          InlineKeyboardButton("🎁 Rewards", callback_data="admin_rewards_menu")],
-        [InlineKeyboardButton("🔗 Settings", callback_data="admin_settings_menu"),
-         InlineKeyboardButton("🎫 Codes", callback_data="admin_codes_menu")],
+        [InlineKeyboardButton("🎫 Codes", callback_data="admin_codes_menu"),
+         InlineKeyboardButton("🔗 Settings", callback_data="admin_settings_menu")],
         [InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
          InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast")],
     ])
@@ -345,6 +343,22 @@ def admin_main_kb():
 # ============================================================
 # HELPERS
 # ============================================================
+async def enforce_membership(user_id, context):
+    """Returns True if user is still in channel(s), False if they left."""
+    if user_id == ADMIN_USER_ID:
+        return True
+    db_user = get_user(user_id)
+    if not db_user or not db_user["is_verified"]:
+        return False
+    is_member = await check_channel_membership(user_id, context)
+    if not is_member:
+        conn = get_db()
+        conn.execute("UPDATE users SET is_verified = 0 WHERE user_id = ?", (user_id,))
+        conn.commit()
+        conn.close()
+        return False
+    return True
+
 async def check_channel_membership(user_id, context):
     ch1 = get_setting("channel_1_username") or "@channel1"
     ch2 = get_setting("channel_2_username") or ""
@@ -437,6 +451,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown")
         return
 
+    if not await enforce_membership(user.id, context):
+        await query.edit_message_text(
+            "❌ *You left the channel!*\nPlease join again and verify.\nSend /start",
+            parse_mode="Markdown")
+        return
+
     # ========== VERIFY ==========
     if data == "verify":
         if user.id == ADMIN_USER_ID:
@@ -460,7 +480,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "❌ *Not joined!*\n\nJoin the channel first, then click VERIFY.",
                 reply_markup=InlineKeyboardMarkup(kb_list), parse_mode="Markdown")
             return
-        verify_user(user.id)
+        referrer = verify_user(user.id)
+        if referrer:
+            reward = get_setting("referral_reward_credits") or "10"
+            try:
+                await context.bot.send_message(
+                    referrer,
+                    f"🎉 *New referral!*\nSomeone joined via your link!\n➕ *{reward}* credits added.\n/start",
+                    parse_mode="Markdown")
+            except Exception:
+                pass
         await query.edit_message_text(
             "✅ *Verified Successfully!*\n\nWelcome to SMS Bot!",
             reply_markup=main_menu_kb(), parse_mode="Markdown")
@@ -602,18 +631,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin":
         if user.id != ADMIN_USER_ID: return
         clear_states(context)
-        await query.edit_message_text("🛡️ *Admin Panel*\n━━━━━━━━━━━━━━", reply_markup=admin_main_kb(), parse_mode="Markdown")
+        await query.edit_message_text("🛡️ *Admin Dashboard*\n━━━━━━━━━━━━━━\nAll settings here — no code needed.", reply_markup=admin_main_kb(), parse_mode="Markdown")
 
     # --- SMS Settings ---
     elif data == "admin_sms_menu":
         if user.id != ADMIN_USER_ID: return
         sms_limit = get_setting("sms_limit") or "1"
         sms_cost = get_setting("sms_cost") or "1"
-        text = f"📨 *SMS Settings*\n\nLimit per request: *{sms_limit}*\nCost per SMS: *{sms_cost}* credits"
+        text = (f"⚡ *SMS Configuration*\n━━━━━━━━━━━━━━\n"
+                f"📨 Limit/Request: *{sms_limit}*\n"
+                f"💎 Cost/SMS: *{sms_cost}* credits")
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✏️ Change SMS Limit", callback_data="admin_sms_limit")],
-            [InlineKeyboardButton("✏️ Change SMS Cost", callback_data="admin_sms_cost")],
-            [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin")],
+            [InlineKeyboardButton("✏️ Edit Limit", callback_data="admin_sms_limit"),
+             InlineKeyboardButton("✏️ Edit Cost", callback_data="admin_sms_cost")],
+            [InlineKeyboardButton("🔙 Dashboard", callback_data="admin")],
         ])
         await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
@@ -691,13 +722,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user.id != ADMIN_USER_ID: return
         pending = len(get_pending_approvals())
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"📋 Pending Approvals ({pending})", callback_data="admin_vip_pending")],
-            [InlineKeyboardButton("👤 Manually Set VIP", callback_data="admin_vip_manual_set")],
-            [InlineKeyboardButton("👤 Remove VIP", callback_data="admin_vip_manual_remove")],
-            [InlineKeyboardButton("📋 List VIP Users", callback_data="admin_vip_list")],
-            [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin")],
+            [InlineKeyboardButton(f"📋 Pending ({pending})", callback_data="admin_vip_pending")],
+            [InlineKeyboardButton("✅ Set VIP", callback_data="admin_vip_manual_set"),
+             InlineKeyboardButton("❌ Remove VIP", callback_data="admin_vip_manual_remove")],
+            [InlineKeyboardButton("📋 All VIPs", callback_data="admin_vip_list")],
+            [InlineKeyboardButton("🔙 Dashboard", callback_data="admin")],
         ])
-        await query.edit_message_text("👑 *VIP Management*", reply_markup=kb, parse_mode="Markdown")
+        await query.edit_message_text("👥 *VIP Management*\n━━━━━━━━━━━━━━", reply_markup=kb, parse_mode="Markdown")
 
     elif data == "admin_vip_pending":
         if user.id != ADMIN_USER_ID: return
@@ -786,11 +817,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user.id != ADMIN_USER_ID: return
         db = get_setting("daily_bonus_credits") or "5"
         ref = get_setting("referral_reward_credits") or "10"
-        text = f"🎁 *Rewards*\n\nDaily Bonus: *{db}* credits\nReferral: *{ref}* credits"
+        text = (f"🎁 *Rewards Config*\n━━━━━━━━━━━━━━\n"
+                f"☀️ Daily Bonus: *{db}* credits\n"
+                f"🔗 Referral: *{ref}* credits")
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✏️ Set Daily Bonus", callback_data="admin_rewards_daily")],
-            [InlineKeyboardButton("✏️ Set Referral Reward", callback_data="admin_rewards_referral")],
-            [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin")],
+            [InlineKeyboardButton("✏️ Daily Bonus", callback_data="admin_rewards_daily"),
+             InlineKeyboardButton("✏️ Referral", callback_data="admin_rewards_referral")],
+            [InlineKeyboardButton("🔙 Dashboard", callback_data="admin")],
         ])
         await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
@@ -827,23 +860,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Channel 2: {ch2_u}\n"
             f"Channel 2 Link: {ch2_l}\n"
             f"Support Dev: {s_dev}\n"
-            f"Support Owner: {s_own}\n"
-            f"──────────────\n"
-            f"API URL: `{api_u}`\n"
-            f"API Key: `{api_k}`\n"
-            f"API Params: `{api_p}`"
+            f"🏷 Owner: {s_own}\n"
+            f"╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n"
+            f"📡 API: `{api_u}`\n"
+            f"🔑 Key: `{api_k}`\n"
+            f"📝 Params: `{api_p}`"
         )
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✏️ Channel 1 Username", callback_data="admin_set_ch1_username")],
-            [InlineKeyboardButton("✏️ Channel 1 Link", callback_data="admin_set_ch1_link")],
-            [InlineKeyboardButton("✏️ Channel 2 Username", callback_data="admin_set_ch2_username")],
-            [InlineKeyboardButton("✏️ Channel 2 Link", callback_data="admin_set_ch2_link")],
-            [InlineKeyboardButton("✏️ Support Dev", callback_data="admin_set_support_dev")],
-            [InlineKeyboardButton("✏️ Support Owner", callback_data="admin_set_support_owner")],
+            [InlineKeyboardButton("✏️ Ch1 User", callback_data="admin_set_ch1_username"),
+             InlineKeyboardButton("✏️ Ch1 Link", callback_data="admin_set_ch1_link")],
+            [InlineKeyboardButton("✏️ Ch2 User", callback_data="admin_set_ch2_username"),
+             InlineKeyboardButton("✏️ Ch2 Link", callback_data="admin_set_ch2_link")],
+            [InlineKeyboardButton("✏️ Support Dev", callback_data="admin_set_support_dev"),
+             InlineKeyboardButton("✏️ Owner", callback_data="admin_set_support_owner")],
             [InlineKeyboardButton("✏️ API URL", callback_data="admin_set_api_url")],
-            [InlineKeyboardButton("✏️ API Key", callback_data="admin_set_api_key")],
-            [InlineKeyboardButton("✏️ API Params", callback_data="admin_set_api_params")],
-            [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin")],
+            [InlineKeyboardButton("✏️ API Key", callback_data="admin_set_api_key"),
+             InlineKeyboardButton("✏️ Params", callback_data="admin_set_api_params")],
+            [InlineKeyboardButton("🔙 Dashboard", callback_data="admin")],
         ])
         await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
@@ -896,14 +929,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_stats":
         if user.id != ADMIN_USER_ID: return
         total, verified, vip, pending = get_stats()
-        text = (
-            f"📊 *Stats*\n\n"
-            f"👥 Users: {total}\n"
-            f"✅ Verified: {verified}\n"
-            f"👑 VIP: {vip}\n"
-            f"📋 Pending Approvals: {pending}"
-        )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin")]])
+        text = (f"📊 *Statistics*\n━━━━━━━━━━━━━━\n"
+                f"👥 Total: *{total}*\n"
+                f"✅ Verified: *{verified}*\n"
+                f"👑 VIP: *{vip}*\n"
+                f"📋 Pending: *{pending}*")
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Dashboard", callback_data="admin")]])
         await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
     # --- Broadcast ---
@@ -921,7 +952,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_user = get_user(user.id)
 
     if text.lower() == "/admin" and user.id == ADMIN_USER_ID:
-        await update.message.reply_text("🛡️ *Admin Panel*\n━━━━━━━━━━━━━━", reply_markup=admin_main_kb(), parse_mode="Markdown")
+        await update.message.reply_text("🛡️ *Admin Dashboard*\n━━━━━━━━━━━━━━\nAll settings — no code needed.", reply_markup=admin_main_kb(), parse_mode="Markdown")
         return
 
     if not db_user or not db_user["is_verified"]:
@@ -930,6 +961,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("Use /start and verify first.")
             return
+
+    if not await enforce_membership(user.id, context):
+        await update.message.reply_text(
+            "❌ *Channel leave detected!*\nRejoin and /start to verify again.",
+            parse_mode="Markdown")
+        return
 
     # --- Send Message flow ---
     state = context.user_data.get("send_state")
