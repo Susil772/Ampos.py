@@ -1321,9 +1321,20 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("awaiting_db_restore", None)
         await update.message.reply_text("✅ DB restored! /start")
 
+async def set_commands(app: Application):
+    try:
+        await app.bot.set_my_commands([
+            ("start", "🔄 Main Menu"),
+            ("admin", "🛡️ Admin Panel"),
+            ("backup", "📦 Backup DB"),
+            ("restore", "📥 Restore DB"),
+        ])
+    except Exception:
+        pass
+
 def main():
     init_db()
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(set_commands).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("backup", db_backup))
@@ -1331,21 +1342,6 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.Document.ALL & ~filters.COMMAND, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    # Set bot commands menu button
-    async def set_cmds():
-        import time
-        await asyncio.sleep(2)
-        try:
-            await app.bot.set_my_commands([
-                ("start", "🔄 Main Menu"),
-                ("admin", "🛡️ Admin Panel"),
-                ("backup", "📦 Backup DB"),
-                ("restore", "📥 Restore DB"),
-            ])
-        except Exception:
-            pass
-    asyncio.ensure_future(set_cmds())
 
     if WEBHOOK_URL or os.getenv("RENDER_EXTERNAL_URL"):
         render_url = WEBHOOK_URL or os.getenv("RENDER_EXTERNAL_URL", "")
