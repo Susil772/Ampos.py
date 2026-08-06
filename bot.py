@@ -373,22 +373,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         create_user(user.id, user.username, user.first_name, referred_by)
         db_user = get_user(user.id)
 
-    if db_user and (db_user["is_verified"] or user.id == ADMIN_USER_ID):
+    if user.id == ADMIN_USER_ID:
+        if not db_user["is_verified"]:
+            verify_user(user.id)
+        await update.message.reply_text("🌟 Welcome Admin! Choose an option:", reply_markup=main_menu_kb())
+        return
+
+    if db_user and db_user["is_verified"]:
         await update.message.reply_text("🌟 Welcome back! Choose an option:", reply_markup=main_menu_kb())
         return
 
     ch1_link = get_setting("channel_1_link") or "https://t.me/channel1"
     ch2_link = get_setting("channel_2_link") or ""
     text = "👋 *Welcome!*\n\nTo use this bot, join:\n📢 " + ch1_link
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Channel 1", url=ch1_link)],
-    ])
+    kb_list = [[InlineKeyboardButton("📢 Channel 1", url=ch1_link)]]
     if ch2_link:
         text += "\n📢 " + ch2_link
-        kb.inline_keyboard.append([InlineKeyboardButton("📢 Channel 2", url=ch2_link)])
+        kb_list.append([InlineKeyboardButton("📢 Channel 2", url=ch2_link)])
     text += "\n\nThen click *Verify* below."
-    kb.inline_keyboard.append([InlineKeyboardButton("✅ Verify", callback_data="verify")])
-    await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
+    kb_list.append([InlineKeyboardButton("✅ Verify", callback_data="verify")])
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb_list), parse_mode="Markdown")
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_USER_ID:
@@ -415,6 +419,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ========== VERIFY ==========
     if data == "verify":
+        if user.id == ADMIN_USER_ID:
+            verify_user(user.id)
+            await query.edit_message_text("✅ Verified! Welcome Admin!", reply_markup=main_menu_kb())
+            return
         if db_user["is_verified"]:
             await query.edit_message_text("✅ Already verified!", reply_markup=main_menu_kb())
             return
@@ -422,15 +430,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_member:
             ch1_l = get_setting("channel_1_link") or "https://t.me/channel1"
             ch2_l = get_setting("channel_2_link") or ""
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📢 Channel 1", url=ch1_l)],
-            ])
+            kb_list = [[InlineKeyboardButton("📢 Channel 1", url=ch1_l)]]
             if ch2_l:
-                kb.inline_keyboard.append([InlineKeyboardButton("📢 Channel 2", url=ch2_l)])
-            kb.inline_keyboard.append([InlineKeyboardButton("✅ Verify", callback_data="verify")])
-            await query.edit_message_text(
-                "❌ Join the channel(s) first!", reply_markup=kb, parse_mode="Markdown"
-            )
+                kb_list.append([InlineKeyboardButton("📢 Channel 2", url=ch2_l)])
+            kb_list.append([InlineKeyboardButton("✅ Verify", callback_data="verify")])
+            await query.edit_message_text("❌ Join channel(s) first!", reply_markup=InlineKeyboardMarkup(kb_list))
             return
         verify_user(user.id)
         await query.edit_message_text("✅ Verified! Welcome!", reply_markup=main_menu_kb())
@@ -893,8 +897,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not db_user or not db_user["is_verified"]:
-        await update.message.reply_text("Use /start and verify first.")
-        return
+        if user.id == ADMIN_USER_ID:
+            verify_user(user.id)
+        else:
+            await update.message.reply_text("Use /start and verify first.")
+            return
 
     # --- Send Message flow ---
     state = context.user_data.get("send_state")
