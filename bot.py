@@ -466,6 +466,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ========== VERIFY ==========
+    if data == "stop_sms":
+        context.user_data["stop_sms"] = True
+        await query.answer("Stopping...")
+        return
+
     if data == "verify":
         if user.id == ADMIN_USER_ID:
             verify_user(user.id)
@@ -1015,50 +1020,69 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not u["is_vip"]:
             sms_cost = int(get_setting("sms_cost") or 1)
-            total_cost = sms_cost * amount
-            if u["credits"] < total_cost:
+            if u["credits"] < sms_cost:
                 await update.message.reply_text(
-                    f"❌ Need {total_cost} credits. You have {u['credits']}.",
+                    f"❌ Need at least {sms_cost} credit. You have {u['credits']}.",
                     reply_markup=main_menu_kb())
                 clear_states(context)
                 return
-            if not deduct_credits(user.id, total_cost):
-                await update.message.reply_text("❌ Error. Try again.", reply_markup=main_menu_kb())
-                clear_states(context)
-                return
-            cost_msg = f"\n💎 Cost: {total_cost} credit(s)"
-        else:
-            cost_msg = "\n👑 VIP: *No credits deducted*"
 
         phone = context.user_data.get("phone_number", "")
-        await update.message.reply_text(
-            f"📤 *Processing*\n\n📱: `{phone}`\n📨: {amount}{cost_msg}\n\n⏳ Sending...",
+        api_url = (get_setting("sms_api_url") or "https://sms-sender-1.onrender.com").rstrip("/")
+        api_key = get_setting("sms_api_key") or "SuSHiLx2024SMS"
+
+        msg = await update.message.reply_text(
+            f"📤 *Sending...*\n\n📱: `{phone}`\n🔄: 0/{amount} rounds",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏹ STOP", callback_data="stop_sms")]]),
             parse_mode="Markdown")
 
-        api_url = get_setting("sms_api_url") or "https://sms-sender-rww0.onrender.com"
-        api_key = get_setting("sms_api_key") or "SuSHiLx2024SMS"
-        api_params = get_setting("sms_api_params") or "number={phone}&count={amount}&apikey={api_key}"
-        api_params = api_params.replace("{phone}", phone).replace("{amount}", str(amount)).replace("{api_key}", api_key)
-        full_url = f"{api_url.rstrip('/')}?{api_params}"
+        context.user_data["stop_sms"] = False
+        context.user_data["sms_running"] = True
+        sent = 0
+        spent = 0
 
-        try:
-            resp = requests.get(full_url, timeout=20)
-            resp_text = resp.text[:300]
-            if resp.status_code == 200:
-                await update.message.reply_text(
-                    f"✅ *Sent!*\n📱: `{phone}`\n📨: {amount}{cost_msg}\n\n/start",
-                    parse_mode="Markdown")
-            else:
-                await update.message.reply_text(
-                    f"⚠️ API error *{resp.status_code}*\nURL: `{full_url[:100]}...`\nResponse: `{resp_text}`\n\n/start",
-                    parse_mode="Markdown")
-        except Exception as e:
-            await update.message.reply_text(
-                f"❌ API connection failed\nURL: `{full_url[:100]}...`\nError: `{e}`\n\n/start",
-                parse_mode="Markdown")
+        for i in range(amount):
+            if context.user_data.get("stop_sms"):
+                break
 
+            try:
+                resp = await asyncio.to_thread(
+                    requests.get,
+                    f"{api_url}/?phone={phone}&rounds=1&key={api_key}",
+                    timeout=180)
+            except Exception:
+                resp = None
+
+            sent += 1
+            if not u["is_vip"]:
+                if deduct_credits(user.id, sms_cost):
+                    spent += sms_cost
+                else:
+                    break
+
+            try:
+                await msg.edit_text(
+                    f"📤 *Sending...*\n\n📱: `{phone}`\n🔄: {sent}/{amount} rounds\n💎 Spent: {spent} cr",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏹ STOP", callback_data="stop_sms")]]),
+                    parse_mode="Markdown")
+            except Exception:
+                pass
+
+            if sent < amount and not context.user_data.get("stop_sms"):
+                await asyncio.sleep(0.5)
+
+        context.user_data.pop("stop_sms", None)
+        context.user_data.pop("sms_running", None)
         clear_states(context)
-        return
+
+        if context.user_data.get("stop_sms") or sent < amount:
+            await msg.edit_text(
+                f"⏹ *Stopped*\n\n📱: `{phone}`\n✅: {sent}/{amount} rounds\n💎: {spent} credits\n\n/start",
+                parse_mode="Markdown")
+        else:
+            await msg.edit_text(
+                f"✅ *Done!*\n📱: `{phone}`\n🔄: {sent}/{amount}\n💎: {spent} cr\n\n/start",
+                parse_mode="Markdown")
 
     # --- Redeem Code flow ---
     if context.user_data.get("redeem_state") == "awaiting_code":
