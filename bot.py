@@ -10,7 +10,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from telegram.error import BadRequest
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8867955581:AAH1zCrwf3YMYAu5WB7lcD3sk0e7n7SjI1w")
-ADMIN_USER_ID = int(os.getenv("ADMIN_ID", "7993310540"))
+ADMIN_USER_ID = int(os.getenv("ADMIN_ID", "7979274156"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
 PORT = int(os.getenv("PORT", "8080"))
 DB_FILE = "bot_database.db"
