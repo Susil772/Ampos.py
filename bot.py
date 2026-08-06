@@ -1198,9 +1198,10 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    if WEBHOOK_URL:
+    if WEBHOOK_URL or os.getenv("RENDER_EXTERNAL_URL"):
+        render_url = WEBHOOK_URL or os.getenv("RENDER_EXTERNAL_URL", "")
         app.run_webhook(listen="0.0.0.0", port=PORT, url_path=BOT_TOKEN,
-                        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
+                        webhook_url=f"{render_url.rstrip('/')}/{BOT_TOKEN}")
     else:
         print("Bot running (polling)...")
         app.run_polling()
