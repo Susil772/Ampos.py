@@ -982,20 +982,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         api_url = get_setting("sms_api_url") or "https://sms-sender-rww0.onrender.com"
         api_key = get_setting("sms_api_key") or "SuSHiLx2024SMS"
-        api_params = get_setting("sms_api_params") or "phone={phone}&count={amount}&apikey={api_key}"
+        api_params = get_setting("sms_api_params") or "number={phone}&count={amount}&apikey={api_key}"
         api_params = api_params.replace("{phone}", phone).replace("{amount}", str(amount)).replace("{api_key}", api_key)
         full_url = f"{api_url.rstrip('/')}?{api_params}"
 
         try:
-            resp = requests.get(full_url, timeout=15)
+            resp = requests.get(full_url, timeout=20)
+            resp_text = resp.text[:300]
             if resp.status_code == 200:
-                await update.message.reply_text("✅ *Sent successfully!* /start for menu.", parse_mode="Markdown")
+                await update.message.reply_text(
+                    f"✅ *Sent!*\n📱: `{phone}`\n📨: {amount}{cost_msg}\n\n/start",
+                    parse_mode="Markdown")
             else:
                 await update.message.reply_text(
-                    f"⚠️ API returned status {resp.status_code}. /start for menu.", parse_mode="Markdown")
+                    f"⚠️ API error *{resp.status_code}*\nURL: `{full_url[:100]}...`\nResponse: `{resp_text}`\n\n/start",
+                    parse_mode="Markdown")
         except Exception as e:
             await update.message.reply_text(
-                f"❌ Failed to connect to API.\n`{e}`\n\nContact support. /start", parse_mode="Markdown")
+                f"❌ API connection failed\nURL: `{full_url[:100]}...`\nError: `{e}`\n\n/start",
+                parse_mode="Markdown")
 
         clear_states(context)
         return
