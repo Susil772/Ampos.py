@@ -69,9 +69,9 @@ def init_db():
         ("channel_2_link", os.getenv("CHANNEL_2_LINK", "")),
         ("support_dev", os.getenv("SUPPORT_DEV", "@developer")),
         ("support_owner", os.getenv("SUPPORT_OWNER", "@owner")),
-        ("sms_api_url", "https://sms-sender-rww0.onrender.com"),
+        ("sms_api_url", "https://sms-sender-1.onrender.com"),
         ("sms_api_key", "SuSHiLx2024SMS"),
-        ("sms_api_params", "number={phone}&count={amount}&apikey={api_key}"),
+        ("sms_api_params", "phone={phone}&rounds={amount}&key={api_key}"),
     ]
     for k, v in defaults:
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
