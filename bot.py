@@ -388,6 +388,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
 
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_USER_ID:
+        await update.message.reply_text("❌ Unauthorized.")
+        return
+    clear_states(context)
+    await update.message.reply_text("🔧 *Admin Panel*", reply_markup=admin_main_kb(), parse_mode="Markdown")
+
 # ============================================================
 # CALLBACK HANDLER
 # ============================================================
@@ -875,13 +882,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     db_user = get_user(user.id)
 
-    if not db_user or not db_user["is_verified"]:
-        await update.message.reply_text("Use /start and verify first.")
-        return
-
-    # --- Admin command ---
     if text.lower() == "/admin" and user.id == ADMIN_USER_ID:
         await update.message.reply_text("🔧 *Admin Panel*", reply_markup=admin_main_kb(), parse_mode="Markdown")
+        return
+
+    if not db_user or not db_user["is_verified"]:
+        await update.message.reply_text("Use /start and verify first.")
         return
 
     # --- Send Message flow ---
@@ -1195,6 +1201,7 @@ def main():
     init_db()
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
