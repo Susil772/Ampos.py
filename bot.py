@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import sys
 import sqlite3
 import random
 import string
@@ -141,14 +142,17 @@ def create_user(user_id, username, first_name, referred_by=None):
 def verify_user(user_id):
     conn = get_db()
     c = conn.cursor()
-    c.execute("UPDATE users SET is_verified = 1 WHERE user_id = ?", (user_id,))
-    referrer_id = None
     u = c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
-    if u and u["referred_by"]:
-        referrer_id = u["referred_by"]
-        reward = int(get_setting("referral_reward_credits") or 10)
-        c.execute("UPDATE users SET credits = credits + ? WHERE user_id = ? AND is_verified = 1",
-                  (reward, referrer_id))
+    if not u:
+        conn.close()
+        return None
+    referrer_id = u["referred_by"]
+    if not u["is_verified"]:
+        c.execute("UPDATE users SET is_verified = 1 WHERE user_id = ?", (user_id,))
+        if referrer_id:
+            reward = int(get_setting("referral_reward_credits") or 10)
+            c.execute("UPDATE users SET credits = credits + ? WHERE user_id = ?",
+                      (reward, referrer_id))
     conn.commit()
     conn.close()
     return referrer_id
@@ -275,12 +279,13 @@ def approve_payment(approval_id):
     c = conn.cursor()
     c.execute("UPDATE pending_approvals SET status = 'approved' WHERE id = ?", (approval_id,))
     approval = c.execute("SELECT * FROM pending_approvals WHERE id = ?", (approval_id,)).fetchone()
+    conn.commit()
+    conn.close()
     if approval:
         plan = get_subscription(approval["plan_id"])
         if plan:
             add_credits(approval["user_id"], plan["credits"])
         set_vip(approval["user_id"], 1)
-    conn.commit(); conn.close()
     return approval
 
 def decline_payment(approval_id):
@@ -317,28 +322,28 @@ def get_all_codes():
 def main_menu_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📤 Send Message", callback_data="send_start", style="primary")],
-        [InlineKeyboardButton("👤 Profile", callback_data="menu_profile"),
-         InlineKeyboardButton("🎁 Bonus", callback_data="menu_daily")],
-        [InlineKeyboardButton("🎫 Redeem", callback_data="redeem_start", style="success"),
-         InlineKeyboardButton("🔗 Referral", callback_data="menu_refer")],
-        [InlineKeyboardButton("👑 VIP", callback_data="menu_vip"),
+        [InlineKeyboardButton("👤 Profile", callback_data="menu_profile", style="success"),
+         InlineKeyboardButton("🎁 Bonus", callback_data="menu_daily", style="danger")],
+        [InlineKeyboardButton("🎫 Redeem", callback_data="redeem_start", style="primary"),
+         InlineKeyboardButton("🔗 Referral", callback_data="menu_refer", style="success")],
+        [InlineKeyboardButton("👑 VIP", callback_data="menu_vip", style="danger"),
          InlineKeyboardButton("💰 Plans", callback_data="sub_menu", style="success")],
-        [InlineKeyboardButton("📞 Support", callback_data="menu_support")],
+        [InlineKeyboardButton("📞 Support", callback_data="menu_support", style="primary")],
     ])
 
 def back_main_btn():
-    return InlineKeyboardButton("🔙 Back", callback_data="menu_main")
+    return InlineKeyboardButton("🔙 Back", callback_data="menu_main", style="primary")
 
 def admin_main_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚡ SMS Config", callback_data="admin_sms_menu"),
-         InlineKeyboardButton("👥 VIP Mgmt", callback_data="admin_vip_menu")],
-        [InlineKeyboardButton("💳 Plans", callback_data="admin_subs_menu"),
-         InlineKeyboardButton("🎁 Rewards", callback_data="admin_rewards_menu")],
-        [InlineKeyboardButton("🎫 Codes", callback_data="admin_codes_menu"),
-         InlineKeyboardButton("🔗 Settings", callback_data="admin_settings_menu")],
-        [InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
-         InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("⚡ SMS Config", callback_data="admin_sms_menu", style="primary"),
+         InlineKeyboardButton("👥 VIP Mgmt", callback_data="admin_vip_menu", style="success")],
+        [InlineKeyboardButton("💳 Plans", callback_data="admin_subs_menu", style="danger"),
+         InlineKeyboardButton("🎁 Rewards", callback_data="admin_rewards_menu", style="primary")],
+        [InlineKeyboardButton("🎫 Codes", callback_data="admin_codes_menu", style="success"),
+         InlineKeyboardButton("🔗 Settings", callback_data="admin_settings_menu", style="danger")],
+        [InlineKeyboardButton("📊 Stats", callback_data="admin_stats", style="primary"),
+         InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast", style="danger")],
     ])
 
 # ============================================================
@@ -559,7 +564,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = "👑 *You are VIP!*\n\nBenefits:\n• 2x Daily Bonus\n• Unlimited SMS\n• Priority support"
         else:
             text = "👑 *VIP Mode*\n\nYou are not VIP.\nBuy a subscription to unlock:\n• 2x Daily Bonus\n• Unlimited SMS"
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💰 Buy Subscription", callback_data="sub_menu")],
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💰 Buy Subscription", callback_data="sub_menu", style="primary")],
                                    [back_main_btn()]])
         await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
@@ -658,9 +663,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📨 Limit/Request: *{sms_limit}*\n"
                 f"💎 Cost/SMS: *{sms_cost}* credits")
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✏️ Edit Limit", callback_data="admin_sms_limit"),
-             InlineKeyboardButton("✏️ Edit Cost", callback_data="admin_sms_cost")],
-            [InlineKeyboardButton("🔙 Dashboard", callback_data="admin")],
+            [InlineKeyboardButton("✏️ Edit Limit", callback_data="admin_sms_limit", style="primary"),
+             InlineKeyboardButton("✏️ Edit Cost", callback_data="admin_sms_cost", style="success")],
+            [InlineKeyboardButton("🔙 Dashboard", callback_data="admin", style="danger")],
         ])
         await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
@@ -686,10 +691,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = []
         for p in plans:
             text += f"• {p['plan_name']} — ${p['price']:.2f} ({p['credits']} cr)\n"
-            kb.append([InlineKeyboardButton(f"✏️ Edit: {p['plan_name']}", callback_data=f"admin_subs_edit_{p['id']}")])
+            kb.append([InlineKeyboardButton(f"✏️ Edit: {p['plan_name']}", callback_data=f"admin_subs_edit_{p['id']}", style="primary")])
             kb.append([InlineKeyboardButton(f"🗑 Delete: {p['plan_name']}", callback_data=f"admin_subs_del_{p['id']}", style="danger")])
-        kb.append([InlineKeyboardButton("➕ Add New Plan", callback_data="admin_subs_add")])
-        kb.append([InlineKeyboardButton("🔙 Admin Panel", callback_data="admin")])
+        kb.append([InlineKeyboardButton("➕ Add New Plan", callback_data="admin_subs_add", style="success")])
+        kb.append([InlineKeyboardButton("🔙 Admin Panel", callback_data="admin", style="danger")])
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
     elif data.startswith("admin_subs_edit_"):
@@ -702,12 +707,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Name: {plan['plan_name']}\nPrice: ${plan['price']:.2f}\nCredits: {plan['credits']}\nDuration: {plan['duration_days']} days\nDesc: {plan['description']}"
         )
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✏️ Name", callback_data=f"admin_subs_field_{plan_id}_plan_name")],
-            [InlineKeyboardButton("✏️ Price", callback_data=f"admin_subs_field_{plan_id}_price")],
-            [InlineKeyboardButton("✏️ Credits", callback_data=f"admin_subs_field_{plan_id}_credits")],
-            [InlineKeyboardButton("✏️ Duration", callback_data=f"admin_subs_field_{plan_id}_duration_days")],
-            [InlineKeyboardButton("✏️ Description", callback_data=f"admin_subs_field_{plan_id}_description")],
-            [InlineKeyboardButton("🔙 Plans", callback_data="admin_subs_menu")],
+            [InlineKeyboardButton("✏️ Name", callback_data=f"admin_subs_field_{plan_id}_plan_name", style="primary")],
+            [InlineKeyboardButton("✏️ Price", callback_data=f"admin_subs_field_{plan_id}_price", style="success")],
+            [InlineKeyboardButton("✏️ Credits", callback_data=f"admin_subs_field_{plan_id}_credits", style="danger")],
+            [InlineKeyboardButton("✏️ Duration", callback_data=f"admin_subs_field_{plan_id}_duration_days", style="primary")],
+            [InlineKeyboardButton("✏️ Description", callback_data=f"admin_subs_field_{plan_id}_description", style="success")],
+            [InlineKeyboardButton("🔙 Plans", callback_data="admin_subs_menu", style="danger")],
         ])
         await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
@@ -725,7 +730,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         plan_id = int(data.split("admin_subs_del_")[1])
         delete_subscription(plan_id)
         await query.edit_message_text("✅ Plan deleted.", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Plans", callback_data="admin_subs_menu")]
+            [InlineKeyboardButton("🔙 Plans", callback_data="admin_subs_menu", style="primary")]
         ]))
 
     elif data == "admin_subs_add":
@@ -738,11 +743,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user.id != ADMIN_USER_ID: return
         pending = len(get_pending_approvals())
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"📋 Pending ({pending})", callback_data="admin_vip_pending")],
-            [InlineKeyboardButton("✅ Set VIP", callback_data="admin_vip_manual_set"),
-             InlineKeyboardButton("❌ Remove VIP", callback_data="admin_vip_manual_remove")],
-            [InlineKeyboardButton("📋 All VIPs", callback_data="admin_vip_list")],
-            [InlineKeyboardButton("🔙 Dashboard", callback_data="admin")],
+            [InlineKeyboardButton(f"📋 Pending ({pending})", callback_data="admin_vip_pending", style="primary")],
+            [InlineKeyboardButton("✅ Set VIP", callback_data="admin_vip_manual_set", style="success"),
+             InlineKeyboardButton("❌ Remove VIP", callback_data="admin_vip_manual_remove", style="danger")],
+            [InlineKeyboardButton("📋 All VIPs", callback_data="admin_vip_list", style="primary")],
+            [InlineKeyboardButton("🔙 Dashboard", callback_data="admin", style="danger")],
         ])
         await query.edit_message_text("👥 *VIP Management*\n━━━━━━━━━━━━━━", reply_markup=kb, parse_mode="Markdown")
 
@@ -751,7 +756,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         approvals = get_pending_approvals()
         if not approvals:
             await query.edit_message_text("No pending approvals.", reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 VIP Menu", callback_data="admin_vip_menu")]
+                [InlineKeyboardButton("🔙 VIP Menu", callback_data="admin_vip_menu", style="primary")]
             ]))
             return
         text = "📋 *Pending Approvals*\n\n"
@@ -764,7 +769,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton(f"✅ Approve #{a['id']}", callback_data=f"admin_vip_approve_{a['id']}", style="success"),
                 InlineKeyboardButton(f"❌ Decline #{a['id']}", callback_data=f"admin_vip_decline_{a['id']}", style="danger"),
             ])
-        kb.append([InlineKeyboardButton("🔙 VIP Menu", callback_data="admin_vip_menu")])
+        kb.append([InlineKeyboardButton("🔙 VIP Menu", callback_data="admin_vip_menu", style="danger")])
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
     elif data.startswith("admin_vip_approve_"):
@@ -785,7 +790,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(
                 f"✅ Approved! User {approval['user_id']} is now VIP.\nPlan: {pname}",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Pending", callback_data="admin_vip_pending")]
+                    [InlineKeyboardButton("🔙 Pending", callback_data="admin_vip_pending", style="primary")]
                 ]))
 
     elif data.startswith("admin_vip_decline_"):
@@ -803,7 +808,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(
                 f"❌ Declined. User {approval['user_id']} notified.",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Pending", callback_data="admin_vip_pending")]
+                    [InlineKeyboardButton("🔙 Pending", callback_data="admin_vip_pending", style="primary")]
                 ]))
 
     elif data == "admin_vip_manual_set":
@@ -825,7 +830,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             text = "👑 *VIP Users:*\n" + "\n".join(
                 f"• `{u['user_id']}` - {u['first_name'] or 'N/A'} (@{u['username'] or 'N/A'})" for u in vips)
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 VIP Menu", callback_data="admin_vip_menu")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 VIP Menu", callback_data="admin_vip_menu", style="primary")]])
         await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
     # --- Rewards Config ---
@@ -837,9 +842,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"☀️ Daily Bonus: *{db}* credits\n"
                 f"🔗 Referral: *{ref}* credits")
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✏️ Daily Bonus", callback_data="admin_rewards_daily"),
-             InlineKeyboardButton("✏️ Referral", callback_data="admin_rewards_referral")],
-            [InlineKeyboardButton("🔙 Dashboard", callback_data="admin")],
+            [InlineKeyboardButton("✏️ Daily Bonus", callback_data="admin_rewards_daily", style="success"),
+             InlineKeyboardButton("✏️ Referral", callback_data="admin_rewards_referral", style="primary")],
+            [InlineKeyboardButton("🔙 Dashboard", callback_data="admin", style="danger")],
         ])
         await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
@@ -883,16 +888,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📝 Params: `{api_p}`"
         )
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✏️ Ch1 User", callback_data="admin_set_ch1_username"),
-             InlineKeyboardButton("✏️ Ch1 Link", callback_data="admin_set_ch1_link")],
-            [InlineKeyboardButton("✏️ Ch2 User", callback_data="admin_set_ch2_username"),
-             InlineKeyboardButton("✏️ Ch2 Link", callback_data="admin_set_ch2_link")],
-            [InlineKeyboardButton("✏️ Support Dev", callback_data="admin_set_support_dev"),
-             InlineKeyboardButton("✏️ Owner", callback_data="admin_set_support_owner")],
-            [InlineKeyboardButton("✏️ API URL", callback_data="admin_set_api_url")],
-            [InlineKeyboardButton("✏️ API Key", callback_data="admin_set_api_key"),
-             InlineKeyboardButton("✏️ Params", callback_data="admin_set_api_params")],
-            [InlineKeyboardButton("🔙 Dashboard", callback_data="admin")],
+            [InlineKeyboardButton("✏️ Ch1 User", callback_data="admin_set_ch1_username", style="primary"),
+             InlineKeyboardButton("✏️ Ch1 Link", callback_data="admin_set_ch1_link", style="success")],
+            [InlineKeyboardButton("✏️ Ch2 User", callback_data="admin_set_ch2_username", style="danger"),
+             InlineKeyboardButton("✏️ Ch2 Link", callback_data="admin_set_ch2_link", style="primary")],
+            [InlineKeyboardButton("✏️ Support Dev", callback_data="admin_set_support_dev", style="success"),
+             InlineKeyboardButton("✏️ Owner", callback_data="admin_set_support_owner", style="danger")],
+            [InlineKeyboardButton("✏️ API URL", callback_data="admin_set_api_url", style="primary")],
+            [InlineKeyboardButton("✏️ API Key", callback_data="admin_set_api_key", style="success"),
+             InlineKeyboardButton("✏️ Params", callback_data="admin_set_api_params", style="danger")],
+            [InlineKeyboardButton("🔙 Dashboard", callback_data="admin", style="danger")],
         ])
         await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
@@ -927,8 +932,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             text += "No codes yet."
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Generate New Code", callback_data="admin_codes_gen")],
-            [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin")],
+            [InlineKeyboardButton("➕ Generate New Code", callback_data="admin_codes_gen", style="success")],
+            [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin", style="danger")],
         ])
         await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
@@ -950,7 +955,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✅ Verified: *{verified}*\n"
                 f"👑 VIP: *{vip}*\n"
                 f"📋 Pending: *{pending}*")
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Dashboard", callback_data="admin")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Dashboard", callback_data="admin", style="primary")]])
         await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
     # --- Broadcast ---
@@ -1306,7 +1311,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 update_subscription(plan_id, field, val)
                 await update.message.reply_text(
                     f"✅ Updated.", reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔙 Plans", callback_data="admin_subs_menu")]
+                        [InlineKeyboardButton("🔙 Plans", callback_data="admin_subs_menu", style="primary")]
                     ]))
                 context.user_data.pop("admin_sub_state", None)
         return
@@ -1352,12 +1357,34 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def set_commands(app: Application):
     try:
+        me = await app.bot.get_me()
+        print(f"✅ Bot @{me.username} started (id={me.id})")
+    except Exception as e:
+        print(f"❌ FATAL: Cannot reach Telegram — check BOT_TOKEN. Error: {e}")
+        raise SystemExit(1)
+    try:
         await app.bot.set_my_commands([
             ("start", "🔄 Main Menu"),
             ("admin", "🛡️ Admin Panel"),
             ("backup", "📦 Backup DB"),
             ("restore", "📥 Restore DB"),
         ])
+    except Exception:
+        pass
+    try:
+        await app.bot.delete_webhook()
+    except Exception:
+        pass
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"❌ ERROR: {type(context.error).__name__}: {context.error}", file=sys.stderr)
+    try:
+        if update and update.effective_user:
+            await context.bot.send_message(
+                ADMIN_USER_ID,
+                f"⚠️ *Bot Error*\nUser: {update.effective_user.id}\n"
+                f"`{type(context.error).__name__}: {str(context.error)[:300]}`",
+                parse_mode="Markdown")
     except Exception:
         pass
 
@@ -1371,14 +1398,16 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.Document.ALL & ~filters.COMMAND, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_error_handler(error_handler)
 
     if WEBHOOK_URL or os.getenv("RENDER_EXTERNAL_URL"):
         render_url = WEBHOOK_URL or os.getenv("RENDER_EXTERNAL_URL", "")
+        print("🌐 Bot running (webhook)...")
         app.run_webhook(listen="0.0.0.0", port=PORT, url_path=BOT_TOKEN,
                         webhook_url=f"{render_url.rstrip('/')}/{BOT_TOKEN}")
     else:
-        print("Bot running (polling)...")
-        app.run_polling()
+        print("🌐 Bot running (polling)...")
+        app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
