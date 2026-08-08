@@ -8,7 +8,7 @@ import requests
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TelegramError
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8867955581:AAH1zCrwf3YMYAu5WB7lcD3sk0e7n7SjI1w")
 ADMIN_USER_ID = int(os.getenv("ADMIN_ID", "7979274156"))
@@ -316,13 +316,13 @@ def get_all_codes():
 # ============================================================
 def main_menu_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📤 Send Message", callback_data="send_start")],
+        [InlineKeyboardButton("📤 Send Message", callback_data="send_start", style="primary")],
         [InlineKeyboardButton("👤 Profile", callback_data="menu_profile"),
          InlineKeyboardButton("🎁 Bonus", callback_data="menu_daily")],
-        [InlineKeyboardButton("🎫 Redeem", callback_data="redeem_start"),
+        [InlineKeyboardButton("🎫 Redeem", callback_data="redeem_start", style="success"),
          InlineKeyboardButton("🔗 Referral", callback_data="menu_refer")],
         [InlineKeyboardButton("👑 VIP", callback_data="menu_vip"),
-         InlineKeyboardButton("💰 Plans", callback_data="sub_menu")],
+         InlineKeyboardButton("💰 Plans", callback_data="sub_menu", style="success")],
         [InlineKeyboardButton("📞 Support", callback_data="menu_support")],
     ])
 
@@ -344,6 +344,24 @@ def admin_main_kb():
 # ============================================================
 # HELPERS
 # ============================================================
+def join_prompt_kb():
+    ch1_link = get_setting("channel_1_link") or "https://t.me/channel1"
+    ch2_link = get_setting("channel_2_link") or ""
+    kb_list = [[InlineKeyboardButton("📢 JOIN CHANNEL", url=ch1_link, style="primary")]]
+    if ch2_link:
+        kb_list.append([InlineKeyboardButton("📢 JOIN CHANNEL 2", url=ch2_link, style="primary")])
+    kb_list.append([InlineKeyboardButton("✅ VERIFY NOW", callback_data="verify", style="success")])
+    return InlineKeyboardMarkup(kb_list)
+
+def join_prompt_text():
+    ch1_link = get_setting("channel_1_link") or "https://t.me/channel1"
+    ch2_link = get_setting("channel_2_link") or ""
+    text = "╔══════════════════╗\n║   👋 *WELCOME*   ║\n╚══════════════════╝\n\n📢 Join channel to continue:"
+    text += f"\n\n🔗 {ch1_link}"
+    if ch2_link: text += f"\n🔗 {ch2_link}"
+    text += "\n\n⬇️ Click *VERIFY* after joining ⬇️"
+    return text
+
 async def enforce_membership(user_id, context):
     if user_id == ADMIN_USER_ID:
         return True
@@ -371,7 +389,7 @@ async def check_channel_membership(user_id, context):
             ok2 = m2.status in ("member", "administrator", "creator")
             return ok1 and ok2
         return ok1
-    except BadRequest:
+    except TelegramError:
         return False
 
 def clear_states(context):
@@ -406,30 +424,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_kb(), parse_mode="Markdown")
         return
 
-    # Auto-reverify: check if user rejoined channel
-    if db_user and not db_user["is_verified"]:
-        is_member = await check_channel_membership(user.id, context)
-        if is_member:
+    # Live membership check: joined -> verified & menu, left -> join prompt
+    is_member = await check_channel_membership(user.id, context)
+    if is_member:
+        if db_user and not db_user["is_verified"]:
             verify_user(user.id)
-            db_user = get_user(user.id)
-
-    if db_user and db_user["is_verified"]:
         await update.message.reply_text(
             "╔══════════════════╗\n║   📬 *SMS BOT*   ║\n╚══════════════════╝\nSelect an option:",
             reply_markup=main_menu_kb(), parse_mode="Markdown")
         return
 
-    ch1_link = get_setting("channel_1_link") or "https://t.me/channel1"
-    ch2_link = get_setting("channel_2_link") or ""
-    text = "╔══════════════════╗\n║   👋 *WELCOME*   ║\n╚══════════════════╝\n\n📢 Join channel to continue:"
-    kb_list = [[InlineKeyboardButton("📢 JOIN CHANNEL", url=ch1_link)]]
-    if ch2_link:
-        kb_list.append([InlineKeyboardButton("📢 JOIN CHANNEL 2", url=ch2_link)])
-    text += f"\n\n🔗 {ch1_link}"
-    if ch2_link: text += f"\n🔗 {ch2_link}"
-    text += "\n\n⬇️ Click *VERIFY* after joining ⬇️"
-    kb_list.append([InlineKeyboardButton("✅ VERIFY NOW", callback_data="verify")])
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb_list), parse_mode="Markdown")
+    conn = get_db()
+    conn.execute("UPDATE users SET is_verified = 0 WHERE user_id = ?", (user.id,))
+    conn.commit()
+    conn.close()
+    await update.message.reply_text(join_prompt_text(), reply_markup=join_prompt_kb(), parse_mode="Markdown")
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_USER_ID:
@@ -459,10 +468,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown")
         return
 
-    if not await enforce_membership(user.id, context):
+    if data != "verify" and data != "stop_sms" and not await enforce_membership(user.id, context):
         await query.edit_message_text(
-            "❌ *You left the channel!*\nPlease join again and verify.\nSend /start",
-            parse_mode="Markdown")
+            "❌ *You left the channel!*\n\nJoin again and click VERIFY.",
+            reply_markup=join_prompt_kb(), parse_mode="Markdown")
         return
 
     # ========== VERIFY ==========
@@ -478,20 +487,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🛡️ *Admin Verified!*\n━━━━━━━━━━━━━━",
                 reply_markup=main_menu_kb(), parse_mode="Markdown")
             return
-        if db_user["is_verified"]:
-            await query.edit_message_text("✅ Already verified!", reply_markup=main_menu_kb())
-            return
         is_member = await check_channel_membership(user.id, context)
         if not is_member:
-            ch1_l = get_setting("channel_1_link") or "https://t.me/channel1"
-            ch2_l = get_setting("channel_2_link") or ""
-            kb_list = [[InlineKeyboardButton("📢 JOIN CHANNEL", url=ch1_l)]]
-            if ch2_l:
-                kb_list.append([InlineKeyboardButton("📢 JOIN CHANNEL 2", url=ch2_l)])
-            kb_list.append([InlineKeyboardButton("✅ VERIFY NOW", callback_data="verify")])
             await query.edit_message_text(
                 "❌ *Not joined!*\n\nJoin the channel first, then click VERIFY.",
-                reply_markup=InlineKeyboardMarkup(kb_list), parse_mode="Markdown")
+                reply_markup=join_prompt_kb(), parse_mode="Markdown")
+            return
+        if db_user["is_verified"]:
+            await query.edit_message_text("✅ Already verified!", reply_markup=main_menu_kb())
             return
         referrer = verify_user(user.id)
         if referrer:
@@ -592,7 +595,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = []
         for p in plans:
             text += f"*{p['plan_name']}* — ${p['price']:.2f}\n  💎 {p['credits']} credits | {p['duration_days']} days\n\n"
-            kb.append([InlineKeyboardButton(f"🛒 Buy: {p['plan_name']}", callback_data=f"sub_buy_{p['id']}")])
+            kb.append([InlineKeyboardButton(f"🛒 Buy: {p['plan_name']}", callback_data=f"sub_buy_{p['id']}", style="primary")])
         text += "After purchase, admin will approve your VIP."
         kb.append([back_main_btn()])
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
@@ -614,7 +617,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         context.user_data["sub_buy_plan_id"] = plan_id
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ I've Paid — Submit for Approval", callback_data=f"sub_confirm_{plan_id}")],
+            [InlineKeyboardButton("✅ I've Paid — Submit for Approval", callback_data=f"sub_confirm_{plan_id}", style="success")],
             [back_main_btn()],
         ])
         await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
@@ -684,7 +687,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for p in plans:
             text += f"• {p['plan_name']} — ${p['price']:.2f} ({p['credits']} cr)\n"
             kb.append([InlineKeyboardButton(f"✏️ Edit: {p['plan_name']}", callback_data=f"admin_subs_edit_{p['id']}")])
-            kb.append([InlineKeyboardButton(f"🗑 Delete: {p['plan_name']}", callback_data=f"admin_subs_del_{p['id']}")])
+            kb.append([InlineKeyboardButton(f"🗑 Delete: {p['plan_name']}", callback_data=f"admin_subs_del_{p['id']}", style="danger")])
         kb.append([InlineKeyboardButton("➕ Add New Plan", callback_data="admin_subs_add")])
         kb.append([InlineKeyboardButton("🔙 Admin Panel", callback_data="admin")])
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
@@ -758,8 +761,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uname = f"@{uu['username']}" if uu and uu["username"] else str(a["user_id"])
             text += f"🆔 {a['user_id']} ({uname}) → {a['plan_name']}\n"
             kb.append([
-                InlineKeyboardButton(f"✅ Approve #{a['id']}", callback_data=f"admin_vip_approve_{a['id']}"),
-                InlineKeyboardButton(f"❌ Decline #{a['id']}", callback_data=f"admin_vip_decline_{a['id']}"),
+                InlineKeyboardButton(f"✅ Approve #{a['id']}", callback_data=f"admin_vip_approve_{a['id']}", style="success"),
+                InlineKeyboardButton(f"❌ Decline #{a['id']}", callback_data=f"admin_vip_decline_{a['id']}", style="danger"),
             ])
         kb.append([InlineKeyboardButton("🔙 VIP Menu", callback_data="admin_vip_menu")])
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
@@ -972,13 +975,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user.id == ADMIN_USER_ID:
             verify_user(user.id)
         else:
-            await update.message.reply_text("Use /start and verify first.")
+            await update.message.reply_text(
+                "⚠️ *Please verify first!*\nJoin the channel and click VERIFY.",
+                reply_markup=join_prompt_kb(), parse_mode="Markdown")
             return
 
     if not await enforce_membership(user.id, context):
         await update.message.reply_text(
-            "❌ *Channel leave detected!*\nRejoin and /start to verify again.",
-            parse_mode="Markdown")
+            "❌ *You left the channel!*\n\nJoin again and click VERIFY.",
+            reply_markup=join_prompt_kb(), parse_mode="Markdown")
         return
 
     # --- Send Message flow ---
@@ -1033,7 +1038,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         msg = await update.message.reply_text(
             f"📤 *Sending...*\n\n📱: `{phone}`\n🔄: 0/{amount} rounds",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏹ STOP", callback_data="stop_sms")]]),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏹ STOP", callback_data="stop_sms", style="danger")]]),
             parse_mode="Markdown")
 
         context.user_data["stop_sms"] = False
@@ -1063,7 +1068,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await msg.edit_text(
                     f"📤 *Sending...*\n\n📱: `{phone}`\n🔄: {sent}/{amount} rounds\n💎 Spent: {spent} cr",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏹ STOP", callback_data="stop_sms")]]),
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏹ STOP", callback_data="stop_sms", style="danger")]]),
                     parse_mode="Markdown")
             except Exception:
                 pass
