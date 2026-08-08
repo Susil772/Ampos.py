@@ -15,7 +15,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8867955581:AAH1zCrwf3YMYAu5WB7lcD3sk0e7n7SjI
 ADMIN_USER_ID = int(os.getenv("ADMIN_ID", "7979274156"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
 PORT = int(os.getenv("PORT", "8080"))
-DB_FILE = "bot_database.db"
+DB_FILE = os.getenv("DB_FILE", "bot_database.db")
+AUTO_BACKUP_HOURS = float(os.getenv("AUTO_BACKUP_HOURS", "6"))
 
 # ============================================================
 # DATABASE
@@ -1322,38 +1323,116 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================================
 # MAIN
 # ============================================================
+def create_db_snapshot(dest_path):
+    src = sqlite3.connect(DB_FILE, timeout=10)
+    dest = sqlite3.connect(dest_path)
+    try:
+        with dest:
+            src.backup(dest)
+    finally:
+        dest.close()
+        src.close()
+
+async def send_backup_file(bot, user_id, caption=""):
+    dest_path = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+    try:
+        create_db_snapshot(dest_path)
+        total, verified, vip, pending = get_stats()
+        caption = caption or (
+            f"📦 *Full Database Backup*\n"
+            f"👥 Users: {total} | ✅ Verified: {verified}\n"
+            f"👑 VIP: {vip} | 📋 Pending: {pending}\n\n"
+            f"✅ Includes: settings, users, credits, plans, redeem codes, approvals.\n"
+            f"Restore: /restore → upload this file."
+        )
+        with open(dest_path, "rb") as f:
+            await bot.send_document(
+                document=f,
+                chat_id=user_id,
+                filename=os.path.basename(dest_path),
+                caption=caption,
+                parse_mode="Markdown")
+    except Exception as e:
+        print(f"❌ Backup failed: {e}", file=sys.stderr)
+        raise
+    finally:
+        if os.path.exists(dest_path):
+            os.remove(dest_path)
+
+def validate_db_file(path):
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        required = {"users", "settings", "subscriptions", "redeem_codes",
+                    "redeemed", "pending_approvals"}
+        missing = required - tables
+        if missing:
+            return f"Invalid backup — missing tables: {', '.join(sorted(missing))}"
+        return None
+    except Exception as e:
+        return f"Invalid database file: {e}"
+    finally:
+        conn.close()
+
 async def db_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_USER_ID:
         await update.message.reply_text("❌ Unauthorized.")
         return
-    if os.path.exists(DB_FILE):
-        await update.message.reply_document(
-            document=open(DB_FILE, "rb"),
-            filename="bot_database_backup.db",
-            caption="📦 Database backup. Download this before updating the bot.\n\nRestore with /restore after redeploy."
-        )
-    else:
+    if not os.path.exists(DB_FILE):
         await update.message.reply_text("No database found.")
+        return
+    try:
+        await send_backup_file(context.bot, update.effective_user.id)
+    except Exception:
+        await update.message.reply_text("❌ Backup failed. See bot logs.")
 
 async def db_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_USER_ID:
         await update.message.reply_text("❌ Unauthorized.")
         return
     if update.message.document:
-        file = await update.message.document.get_file()
-        await file.download_to_drive(DB_FILE)
-        await update.message.reply_text("✅ Database restored! Restart the bot or send /start.")
+        await restore_from_file(context, update.message.document, update.effective_chat.id)
     else:
         context.user_data["awaiting_db_restore"] = True
         await update.message.reply_text("Send the .db backup file now.")
 
+async def restore_from_file(context, document, chat_id):
+    tmp = DB_FILE + ".restore_tmp"
+    try:
+        file = await document.get_file()
+        await file.download_to_drive(tmp)
+        err = validate_db_file(tmp)
+        if err:
+            if os.path.exists(tmp): os.remove(tmp)
+            await context.bot.send_message(chat_id, f"❌ {err}\nPlease send the correct backup file.")
+            return
+        os.replace(tmp, DB_FILE)
+        if os.path.exists(DB_FILE + "-wal"): os.remove(DB_FILE + "-wal")
+        if os.path.exists(DB_FILE + "-shm"): os.remove(DB_FILE + "-shm")
+        await context.bot.send_message(
+            chat_id,
+            "✅ Database restored successfully!\n/start")
+    except Exception as e:
+        print(f"❌ Restore failed: {e}", file=sys.stderr)
+        if os.path.exists(tmp): os.remove(tmp)
+        try:
+            await context.bot.send_message(chat_id, "❌ Restore failed. See bot logs.")
+        except Exception:
+            pass
+
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_USER_ID: return
     if context.user_data.get("awaiting_db_restore"):
-        file = await update.message.document.get_file()
-        await file.download_to_drive(DB_FILE)
         context.user_data.pop("awaiting_db_restore", None)
-        await update.message.reply_text("✅ DB restored! /start")
+        await restore_from_file(context, update.message.document, update.effective_chat.id)
+
+async def auto_backup_job(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await send_backup_file(context.bot, ADMIN_USER_ID)
+    except Exception:
+        pass
 
 async def set_commands(app: Application):
     try:
@@ -1399,6 +1478,12 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL & ~filters.COMMAND, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
+
+    if app.job_queue:
+        app.job_queue.run_repeating(
+            auto_backup_job,
+            interval=AUTO_BACKUP_HOURS * 3600,
+            first=AUTO_BACKUP_HOURS * 3600)
 
     if WEBHOOK_URL or os.getenv("RENDER_EXTERNAL_URL"):
         render_url = WEBHOOK_URL or os.getenv("RENDER_EXTERNAL_URL", "")
